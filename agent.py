@@ -11,7 +11,8 @@ The agent can:
 4. Extract primary-source paper text.
 5. Run the scoped RNA-seq reproduction.
 6. Verify reproduced results against the publication.
-7. Return a natural-language answer grounded in tool outputs.
+7. Run a descriptive RNA-seq/WGBS multi-omics pilot.
+8. Return a natural-language answer grounded in tool outputs.
 
 Current tools:
 
@@ -21,6 +22,7 @@ Current tools:
     - inspect_dataset
     - run_rna_seq_reproduction
     - verify_rna_seq_reproduction
+    - run_multiomics_pilot
 
 Architecture:
 
@@ -52,6 +54,12 @@ from reproduce_analysis import run_reproduction
 
 from tools.dataset_tools import (
     inspect_dataset,
+)
+
+from tools.multiomics_tools import (
+    run_multiomics_pilot,
+    save_multiomics_pilot,
+    save_multiomics_summary,
 )
 
 from tools.paper_extraction_tools import (
@@ -177,9 +185,9 @@ TOOLS = [
         "description": (
             "Retrieve the primary-source full text of a "
             "scientific paper from NCBI PMC. Use this tool "
-            "to answer questions about the paper's methods, "
-            "analysis workflow, datasets, and main results. "
-            "The returned text comes from the article itself."
+            "to answer questions about methods, workflow, "
+            "datasets, and main results. The returned text "
+            "comes from the article itself."
         ),
 
         "input_schema": {
@@ -281,6 +289,34 @@ TOOLS = [
             "required": [],
         },
     },
+
+    # --------------------------------------------------------
+    # 7. MULTI-OMICS PILOT
+    # --------------------------------------------------------
+
+    {
+        "name": "run_multiomics_pilot",
+
+        "description": (
+            "Run a descriptive RNA-seq/WGBS integration pilot "
+            "for PMID 24792119. The pilot takes the independently "
+            "reproduced RNA-seq significant genes and combines "
+            "them with promoter methylation from one young and "
+            "one aged WGBS sample. It returns gene-level "
+            "multi-omics pattern counts and generated result "
+            "files. This is exploratory and must not be "
+            "presented as a statistically validated WGBS "
+            "analysis."
+        ),
+
+        "input_schema": {
+            "type": "object",
+
+            "properties": {},
+
+            "required": [],
+        },
+    },
 ]
 
 
@@ -360,6 +396,83 @@ def execute_tool(
             reproduced_path=REPRODUCED_RESULTS,
             reference_path=REFERENCE_RESULTS,
         )
+
+    # --------------------------------------------------------
+    # Multi-omics pilot
+    # --------------------------------------------------------
+
+    if tool_name == "run_multiomics_pilot":
+
+        integrated = run_multiomics_pilot()
+
+        table_path = (
+            save_multiomics_pilot(
+                integrated
+            )
+        )
+
+        summary_path = (
+            save_multiomics_summary(
+                integrated
+            )
+        )
+
+        pattern_counts = (
+            integrated[
+                "multiomics_pattern"
+            ]
+            .value_counts()
+            .to_dict()
+        )
+
+        genes_with_wgbs = int(
+            integrated[
+                "promoter_methylation_change"
+            ]
+            .notna()
+            .sum()
+        )
+
+        return {
+            "status": "completed",
+            "analysis_type": "descriptive_multiomics_pilot",
+            "paper_pmid": "24792119",
+            "rna_dataset": "GSE47817",
+            "wgbs_dataset": "GSE47815",
+            "rna_significant_genes": int(
+                len(integrated)
+            ),
+            "genes_with_wgbs_promoter_data": (
+                genes_with_wgbs
+            ),
+            "genes_without_wgbs_promoter_data": (
+                int(
+                    len(integrated)
+                    - genes_with_wgbs
+                )
+            ),
+            "young_wgbs_sample": "GSM1160012",
+            "aged_wgbs_sample": "GSM1160019",
+            "promoter_definition": (
+                "2 kb upstream of transcription start "
+                "site for plus-strand genes and 2 kb "
+                "downstream of gene end for minus-strand genes"
+            ),
+            "pattern_counts": pattern_counts,
+            "result_file": str(
+                table_path
+            ),
+            "summary_file": str(
+                summary_path
+            ),
+            "statistical_inference": False,
+            "important_limitation": (
+                "Only one young and one aged WGBS sample "
+                "were used; this is an exploratory descriptive "
+                "integration and not a statistically validated "
+                "WGBS reproduction."
+            ),
+        }
 
     # --------------------------------------------------------
     # Unknown tool
@@ -463,10 +576,10 @@ CORE RULES
 5. If a statement is an interpretation rather than something
    explicitly reported by the authors, make that distinction clear.
 
-6. Never claim an analysis was reproduced unless the
+6. Never claim that an analysis was reproduced unless the
    reproduction tool actually executed it.
 
-7. Never claim reproduced results match the paper unless
+7. Never claim that reproduced results match the paper unless
    the verification tool actually performed the comparison.
 
 8. PARTIAL_MATCH is not MATCH.
@@ -488,6 +601,17 @@ CORE RULES
 
 13. If the available evidence is insufficient, say so.
 
+14. The WGBS/multi-omics tool is a DESCRIPTIVE PILOT.
+    It uses one young and one aged WGBS sample and must
+    NOT be described as statistically validated differential
+    methylation analysis.
+
+15. For WGBS pilot interpretation, emphasize that the tool
+    demonstrates workflow integration rather than causal
+    inference or statistically significant methylation changes.
+
+16. Never invent statistical significance for the WGBS pilot.
+
 PAPER QUESTIONS
 
 If the user asks about:
@@ -508,6 +632,17 @@ For a request to reproduce PMID 24792119:
 4. Explain the numerical result and limitations.
 
 Do not claim successful replication before verification.
+
+MULTI-OMICS QUESTIONS
+
+For a request to integrate RNA-seq and WGBS:
+
+1. Run the multi-omics pilot.
+2. Clearly describe it as exploratory/descriptive.
+3. Report the pattern counts returned by the tool.
+4. State that one young and one aged WGBS sample were used.
+5. Do not assign statistical significance to the methylation
+   patterns.
 
 WORKFLOW SKILLS
 ================
@@ -532,7 +667,7 @@ The following SKILL.md files provide procedural guidance:
         )
 
         # ----------------------------------------------------
-        # Store Claude's response in the conversation.
+        # Store Claude's response.
         # ----------------------------------------------------
 
         messages.append(
